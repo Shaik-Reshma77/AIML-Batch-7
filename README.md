@@ -1,5 +1,5 @@
-# Predictive Analysis for Mental Health Instability Using Machine Learning
-
+# Predictive Analysis for Mental Health Instability Using Machine Learning Techniques
+ 
 ## Abstract
 Mental health instability is a growing concern among students and working professionals.  
 Early identification can help in timely intervention and prevention.  
