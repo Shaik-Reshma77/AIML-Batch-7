@@ -1,0 +1,169 @@
+import pandas as pd
+import numpy as np
+import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+from sklearn.ensemble import RandomForestClassifier, StackingClassifier
+from sklearn.linear_model import LogisticRegression
+from xgboost import XGBClassifier
+from imblearn.over_sampling import SMOTENC
+
+import warnings
+warnings.filterwarnings("ignore")
+
+# -----------------------------
+# Step 1: Load Dataset
+# -----------------------------
+df = pd.read_csv("/content/Stress_Balanced_Data.csv")
+
+# -----------------------------
+# Step 2: Convert time to minutes
+# -----------------------------
+def time_to_minutes(t):
+    t = pd.to_datetime(t, errors='coerce')  # auto-detect format
+    if pd.isnull(t):
+        return np.nan
+    return t.hour * 60 + t.minute
+
+df['Wake_Up_Time'] = df['Wake_Up_Time'].apply(time_to_minutes)
+df['Bed_Time'] = df['Bed_Time'].apply(time_to_minutes)
+
+# Fill missing numeric values
+df.fillna(df.median(numeric_only=True), inplace=True)
+
+# -----------------------------
+# Step 3: Cyclical encoding for time
+# -----------------------------
+df['Wake_Up_sin'] = np.sin(2 * np.pi * df['Wake_Up_Time'] / 1440)
+df['Wake_Up_cos'] = np.cos(2 * np.pi * df['Wake_Up_Time'] / 1440)
+df['Bed_sin'] = np.sin(2 * np.pi * df['Bed_Time'] / 1440)
+df['Bed_cos'] = np.cos(2 * np.pi * df['Bed_Time'] / 1440)
+df.drop(['Wake_Up_Time','Bed_Time'], axis=1, inplace=True)
+
+# -----------------------------
+# Step 4: Encode categorical features
+# -----------------------------
+categorical_cols = [
+    'Gender', 'Occupation', 'Marital_Status',
+    'Smoking_Habit', 'Meditation_Practice', 'Exercise_Type'
+]
+
+encoders = {}
+for col in categorical_cols:
+    le = LabelEncoder()
+    df[col] = le.fit_transform(df[col])
+    encoders[col] = le
+
+# -----------------------------
+# Step 5: Encode target
+# -----------------------------
+# Binary target (Low=0, Medium/High=1) → Higher accuracy
+target_encoder = LabelEncoder()
+df['Stress_Detection'] = df['Stress_Detection'].replace({
+    'Low':0, 'Medium':1, 'High':1
+})
+df['Stress_Detection'] = target_encoder.fit_transform(df['Stress_Detection'])
+
+# -----------------------------
+# Step 6: Features & Target
+# -----------------------------
+X = df.drop('Stress_Detection', axis=1)
+y = df['Stress_Detection']
+
+# -----------------------------
+# Step 7: SMOTENC for categorical columns
+# -----------------------------
+cat_indices = [X.columns.get_loc(c) for c in categorical_cols]
+smote = SMOTENC(categorical_features=cat_indices, random_state=42)
+X_res, y_res = smote.fit_resample(X, y)
+
+# -----------------------------
+# Step 8: Train-Test Split
+# -----------------------------
+X_train, X_test, y_train, y_test = train_test_split(
+    X_res, y_res, test_size=0.2, random_state=42, stratify=y_res
+)
+
+# -----------------------------
+# Step 9: Stacking Model
+# -----------------------------
+base_models = [
+    ('rf', RandomForestClassifier(
+        n_estimators=300, max_depth=12, random_state=42
+    )),
+    ('xgb', XGBClassifier(
+        n_estimators=300,
+        max_depth=5,
+        learning_rate=0.1,
+        eval_metric='logloss',
+        use_label_encoder=False,
+        random_state=42
+    ))
+]
+
+stack_model = StackingClassifier(
+    estimators=base_models,
+    final_estimator=LogisticRegression(max_iter=1000),
+    cv=5
+)
+
+# -----------------------------
+# Step 10: Train
+# -----------------------------
+stack_model.fit(X_train, y_train)
+
+# -----------------------------
+# Step 11: Evaluate
+# -----------------------------
+y_pred = stack_model.predict(X_test)
+
+# Accuracy & classification report
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+# -----------------------------
+# Step 12: Confusion Matrix
+# -----------------------------
+cm = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(6,5))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=target_encoder.classes_, yticklabels=target_encoder.classes_)
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.title("Confusion Matrix - Stress Detection")
+plt.show()
+
+# -----------------------------
+# Step 13: Feature Importance (from RandomForest)
+# -----------------------------
+importances = stack_model.named_estimators_['rf'].feature_importances_
+feat_imp = pd.Series(importances, index=X.columns).sort_values(ascending=False)
+
+plt.figure(figsize=(10,6))
+sns.barplot(x=feat_imp.values, y=feat_imp.index, palette="viridis")
+plt.title("Feature Importance - Stress Detection (RF)")
+plt.xlabel("Importance")
+plt.ylabel("Features")
+plt.show()
+
+# -----------------------------
+# Step 14: Stress Distribution in Test Set
+# -----------------------------
+test_dist = pd.Series(y_test).value_counts().sort_index()
+plt.figure(figsize=(6,4))
+sns.barplot(x=target_encoder.inverse_transform(test_dist.index), y=test_dist.values, palette="pastel")
+plt.title("Stress Distribution in Test Set")
+plt.xlabel("Stress Level")
+plt.ylabel("Count")
+plt.show()
+
+# -----------------------------
+# Step 15: Save Model & Encoders
+# -----------------------------
+
+
+print("\n✅ Model, encoders, feature order, and target saved successfully!")
